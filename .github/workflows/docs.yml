@@ -1,0 +1,78 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - 'mkdocs.yml'
+      - 'requirements-docs.txt'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+
+      - name: Install docs dependencies
+        run: pip install -r requirements-docs.txt
+
+      - name: Prepare docs directory
+        run: |
+          mkdir -p docs
+          # Copy everything to docs/
+          cp -r . docs/ || true
+          # Rename dot-folders so MkDocs processes them (it ignores hidden folders)
+          mv docs/.github docs/github_internal || true
+          mv docs/.claude docs/claude_internal || true
+          # Clean up to avoid infinite recursion and unwanted files
+          rm -rf docs/docs docs/site docs/.git
+          # Update internal links from README.md to index.md and handle renamed dot-folders
+          find docs -name "*.md" -exec sed -i 's/README\.md/index.md/g' {} +
+          find docs -name "*.md" -exec sed -i 's/\.github/github_internal/g' {} +
+          find docs -name "*.md" -exec sed -i 's/\.claude/claude_internal/g' {} +
+          # Recursively rename README.md to index.md for canonical MkDocs structure
+          find docs -name "README.md" -execdir mv README.md index.md \;
+          # Create index files for folders that don't have them but are in the nav
+          mkdir -p docs/github_internal/workflows
+          echo "# GitHub Workflows" > docs/github_internal/workflows/index.md
+          mkdir -p docs/claude_internal/skills
+          echo "# Claude Skills" > docs/claude_internal/skills/index.md
+
+      - name: Build site
+        run: mkdocs build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
